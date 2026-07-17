@@ -1,11 +1,55 @@
 import { useState } from 'react';
-import { calcStats, getNivel } from '../lib/evaluacion.js';
+import { calcStats, getNivel, NIVEL_LABELS } from '../lib/evaluacion.js';
+import { PASOS_PROCESO } from '../lib/constants.js';
+import { BPS } from '../data/bps.js';
 import { exportarPDF } from '../features/export/pdf.js';
 import { exportarExcel } from '../features/export/excel.js';
 import BrandFooter from './BrandFooter.jsx';
 
+function fmtFecha(f) {
+  return f ? new Date(f).toLocaleString('es-ES') : '';
+}
+
+// Stepper visual del estado del proceso. Pinta cada paso ya superado en
+// verde, el paso actual resaltado, y los futuros en gris. Si el estado
+// actual no está en la lista (no debería pasar aquí, pero por seguridad),
+// no rompe — simplemente no resalta ningún paso como "actual".
+function EstadoStepper({ estadoActual }) {
+  const idxActual = PASOS_PROCESO.findIndex((p) => p.estado === estadoActual);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, margin: '4px 0 16px', flexWrap: 'wrap' }}>
+      {PASOS_PROCESO.map((paso, i) => {
+        const superado = idxActual >= 0 && i < idxActual;
+        const actual = i === idxActual;
+        const color = actual ? '#00B8C8' : superado ? '#4CAF50' : '#CFD8DC';
+        return (
+          <div key={paso.estado} style={{ display: 'flex', alignItems: 'center' }}>
+            <div
+              style={{
+                fontSize: 10,
+                fontWeight: actual ? 900 : 700,
+                color: actual || superado ? '#fff' : '#607D8B',
+                background: color,
+                padding: '4px 9px',
+                borderRadius: 20,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {superado ? '✔ ' : ''}
+              {paso.label}
+            </div>
+            {i < PASOS_PROCESO.length - 1 && (
+              <div style={{ width: 10, height: 2, background: '#CFD8DC' }} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function Dashboard({ evalData }) {
-  const { state, obs, files, tipo, locked, lockDate, cerrar } = evalData;
+  const { state, obs, files, subsanacion, tipo, proceso, locked, lockDate, enSubsanacion, cerrar } = evalData;
   const [modalOpen, setModalOpen] = useState(false);
 
   const s = calcStats(state, tipo);
@@ -20,6 +64,12 @@ export default function Dashboard({ evalData }) {
       : nv.color === '#BDBDBD'
         ? 'linear-gradient(135deg,#aaa,#888)'
         : 'var(--turq)';
+
+  const estadoActual = proceso?.estado;
+  // El proceso puede (re)cerrarse tanto desde autoevaluación normal como,
+  // tras subsanar, desde en_subsanacion — fn_cerrar_evaluacion en
+  // servidor ya acepta ambos orígenes.
+  const puedeCerrar = estadoActual === 'en_autoevaluacion' || enSubsanacion;
 
   const reqs = [
     {
@@ -42,6 +92,17 @@ export default function Dashboard({ evalData }) {
     },
   ];
 
+  // Lista de estándares marcados por el evaluador como pendientes de
+  // corrección, con su nota. Visible tanto en subsanación activa como
+  // más adelante (histórico), para que quede constancia de qué se pidió.
+  const itemsSubsanacion = Object.entries(subsanacion || {})
+    .filter(([, v]) => v.requiere)
+    .map(([bpId, v]) => ({
+      bpId,
+      nota: v.nota,
+      texto: BPS.find((b) => b.id === bpId)?.text || bpId,
+    }));
+
   function confirmarCierre() {
     cerrar();
     setModalOpen(false);
@@ -51,6 +112,8 @@ export default function Dashboard({ evalData }) {
 
   return (
     <div className="view active dash">
+      {estadoActual && <EstadoStepper estadoActual={estadoActual} />}
+
       <div className="level-card" style={{ background: levelBg }}>
         <div className="lv-label">Nivel del Distintivo</div>
         <div className="lv-val">{s.totalCumpl === 0 ? '— Comienza marcando BPs —' : nv.txt}</div>
@@ -58,6 +121,39 @@ export default function Dashboard({ evalData }) {
           {s.totalCumpl === 0 ? 'Selecciona tu tipo de institución arriba' : nv.sub}
         </div>
       </div>
+
+      {/* Mensaje específico según la fase del proceso, además del banner
+          de bloqueo genérico de más abajo. */}
+      {estadoActual === 'en_evaluacion' && (
+        <div style={{ background: '#E3F2FD', border: '1px solid #2196F3', borderRadius: 10, padding: 12, marginBottom: 14, fontSize: 13, color: '#0D47A1', fontWeight: 700 }}>
+          🔍 Tu proceso está siendo evaluado en este momento por el equipo revisor.
+        </div>
+      )}
+      {estadoActual === 'en_revision_final' && (
+        <div style={{ background: '#E8F5E9', border: '1px solid #4CAF50', borderRadius: 10, padding: 12, marginBottom: 14, fontSize: 13, color: '#1B5E20', fontWeight: 700, lineHeight: 1.6 }}>
+          🏁 Evaluación final completada. Nivel conseguido:{' '}
+          <strong>{NIVEL_LABELS[proceso?.nivel_conseguido] || '—'}</strong>.
+          <br />
+          En las próximas semanas recibirás un certificado oficial que acredita tu nivel.
+        </div>
+      )}
+
+      {/* Informe de subsanaciones: visible siempre que exista al menos un
+          estándar marcado, tanto para el solicitante (aquí) como para el
+          evaluador (misma información se muestra en el panel admin). */}
+      {itemsSubsanacion.length > 0 && (
+        <div style={{ background: '#FFF3E0', border: '1px solid #FFB74D', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 900, color: '#E65100', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 8 }}>
+            ⚠ Informe de subsanaciones ({itemsSubsanacion.length})
+          </div>
+          {itemsSubsanacion.map((it) => (
+            <div key={it.bpId} style={{ fontSize: 12, marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid #FFE0B2' }}>
+              <div style={{ fontWeight: 800, color: '#E65100' }}>{it.bpId} — {it.texto}</div>
+              <div style={{ color: '#5D4037', marginTop: 2 }}>{it.nota || 'Sin detalle adicional.'}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="stat-grid">
         <div className="stat-card">
@@ -149,14 +245,24 @@ export default function Dashboard({ evalData }) {
         📊 Exportar Resumen (Excel)
       </button>
 
-      <button className="lock-btn" disabled={locked} onClick={() => setModalOpen(true)}>
-        {locked ? '🔒 Evaluación cerrada' : '🔒 Cerrar evaluación'}
+      <button className="lock-btn" disabled={!puedeCerrar} onClick={() => setModalOpen(true)}>
+        {puedeCerrar
+          ? enSubsanacion
+            ? '🔒 Volver a cerrar (tras corrección)'
+            : '🔒 Cerrar evaluación'
+          : '🔒 Evaluación no editable ahora mismo'}
       </button>
-      {locked && (
+
+      {estadoActual === 'cerrada' && (
         <div className="lock-banner" style={{ display: 'block' }}>
-          🔒 Evaluación cerrada el{' '}
-          {lockDate ? new Date(lockDate).toLocaleString('es-ES') : ''}. Ya no se pueden
-          modificar las buenas prácticas.
+          🔒 Evaluación cerrada el {fmtFecha(lockDate)}. Pendiente de que el equipo evaluador
+          la revise.
+        </div>
+      )}
+      {enSubsanacion && (
+        <div className="lock-banner" style={{ display: 'block', background: '#FFF3E0', color: '#E65100' }}>
+          ⚠ Corrige los estándares señalados arriba y vuelve a cerrar la evaluación cuando
+          termines.
         </div>
       )}
 

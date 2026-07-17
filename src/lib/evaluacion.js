@@ -79,3 +79,25 @@ export function getNivel(s) {
     )} de ${s.noeTotal})`,
   };
 }
+
+/**
+ * Código estable del nivel (para guardar en BD vía fn_evaluacion_final).
+ * NO cambia las reglas de negocio — solo traduce el mismo resultado de
+ * getNivel() a uno de los 4 códigos que acepta la BD: 'sin_nivel',
+ * 'esenciales_ok', 'avanzado', 'excelente'.
+ */
+export function getNivelCodigo(s) {
+  const esenOk = s.esenCumpl === s.esenTotal && s.esenTotal > 0;
+  if (!esenOk) return 'sin_nivel';
+  if (s.pNoe >= 75) return 'excelente';
+  if (s.pNoe >= 50) return 'avanzado';
+  return 'esenciales_ok';
+}
+
+/** Etiquetas legibles de cada código de nivel, para mostrar en UI. */
+export const NIVEL_LABELS = {
+  sin_nivel: '⚠ Sin nivel',
+  esenciales_ok: '📋 Esenciales OK',
+  avanzado: '🏅 AVANZADO',
+  excelente: '⭐ EXCELENTE',
+};

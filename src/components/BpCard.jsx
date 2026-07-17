@@ -16,6 +16,44 @@ const TAGS = {
   noe: { text: '○ No esencial', cls: 'tag-noe' },
 };
 
+// Estilos inline autocontenidos — no dependen de soludable.css (no
+// disponible al escribir este componente). Si se prefiere mover a
+// clases CSS propias más adelante, es un cambio directo.
+const pillBaseStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  fontSize: 11,
+  fontWeight: 700,
+  padding: '2px 8px',
+  borderRadius: 999,
+  marginLeft: 8,
+  whiteSpace: 'nowrap',
+};
+
+const pillOkStyle = { ...pillBaseStyle, background: 'rgba(0, 184, 212, 0.15)', color: '#00838F' };
+const pillNoStyle = { ...pillBaseStyle, background: 'rgba(176, 190, 197, 0.25)', color: '#607D8B' };
+
+const hintStyle = {
+  fontSize: 10,
+  color: '#B0BEC5',
+  textAlign: 'center',
+  lineHeight: 1.2,
+  marginTop: 4,
+  maxWidth: 60,
+};
+
+const subsanacionBannerStyle = {
+  background: '#FFF3E0',
+  border: '1px solid #FFB74D',
+  borderRadius: 8,
+  padding: '8px 10px',
+  margin: '0 0 8px',
+  fontSize: 12,
+  color: '#E65100',
+  lineHeight: 1.5,
+};
+
 export default function BpCard({
   bp,
   checked,
@@ -23,6 +61,8 @@ export default function BpCard({
   files, // array: [{evidenciaId, name, size, path}, ...]
   hidden,
   locked,
+  requiereSubsanacion, // NUEVO: true si el evaluador pidió corrección en este estándar
+  notaSubsanacion, // NUEVO: texto de qué hay que corregir
   onToggle,
   onObs,
   onAddFile,
@@ -92,13 +132,38 @@ export default function BpCard({
     .join(' ');
 
   return (
-    <div className={cardCls} data-bp={bp.id} data-tipo={bp.tipo}>
+    <div
+      className={cardCls}
+      data-bp={bp.id}
+      data-tipo={bp.tipo}
+      style={requiereSubsanacion ? { outline: '2px solid #FFB74D', outlineOffset: 2 } : undefined}
+    >
+      {requiereSubsanacion && (
+        <div style={subsanacionBannerStyle}>
+          <strong>⚠ Requiere corrección:</strong> {notaSubsanacion || 'El evaluador ha solicitado revisar este estándar.'}
+        </div>
+      )}
+
       <div className="bp-item">
-        <div className="bp-dot-col" onClick={() => onToggle(bp.id)}>
+        <div
+          className="bp-dot-col"
+          onClick={() => onToggle(bp.id)}
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}
+        >
           <div className="bp-dot"></div>
+          {/* Aviso recordatorio: solo visible mientras el estándar NO esté
+              marcado y sea editable. Desaparece en cuanto se hace check. */}
+          {!checked && !locked && (
+            <div style={hintStyle}>Toca para marcar cumplido</div>
+          )}
         </div>
         <div className="bp-content" onClick={() => setExpanded((v) => !v)}>
-          <div className="bp-code">{bp.id}</div>
+          <div className="bp-code">
+            {bp.id}
+            <span style={checked ? pillOkStyle : pillNoStyle}>
+              {checked ? '✅ Cumple' : '⬜ No cumple'}
+            </span>
+          </div>
           <div className="bp-text">{bp.text}</div>
           <span className={`bp-tipo-tag ${tag.cls}`}>{tag.text}</span>
         </div>

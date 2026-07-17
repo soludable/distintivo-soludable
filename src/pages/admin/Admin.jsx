@@ -10,23 +10,25 @@ import {
   aprobarSolicitud,
   rechazarSolicitud,
   vincularProcesoUsuario,
+  getEvaluacion,
+  iniciarEvaluacion,
+  marcarSubsanacionAportacion,
+  enviarASubsanacion,
+  evaluacionFinal,
+  reabrirProceso,
+  borrarProceso,
 } from '../../lib/dataStore.js';
-import { CATEGORIAS_ANEXO_I, ESTADO_LABELS, EMAIL_ADMIN, TIPOS_INSTITUCION } from '../../lib/constants.js';
+import {
+  CATEGORIAS_ANEXO_I,
+  ESTADO_LABELS,
+  ESTADO_COLOR,
+  EMAIL_ADMIN,
+  TIPOS_INSTITUCION,
+} from '../../lib/constants.js';
 import { BPS, DIM_NAMES } from '../../data/bps.js';
-import { isActive, calcStats, getNivel } from '../../lib/evaluacion.js';
-import { getEvaluacion } from '../../lib/dataStore.js';
+import { isActive, calcStats, getNivel, getNivelCodigo, NIVEL_LABELS } from '../../lib/evaluacion.js';
 import BpCard from '../../components/BpCard.jsx';
 import BrandFooter from '../../components/BrandFooter.jsx';
-
-const ESTADO_COLOR = {
-  solicitada: '#F5C800',
-  en_revision: '#00B8C8',
-  aprobada: '#4CAF50',
-  rechazada: '#E53935',
-  en_autoevaluacion: '#00B8C8',
-  cerrada: '#7E57C2',
-  en_revision_final: '#7E57C2',
-};
 
 function Badge({ estado }) {
   return (
@@ -69,6 +71,13 @@ export default function Admin() {
   const [errorPanel, setErrorPanel] = useState('');
   const [accionando, setAccionando] = useState(false);
 
+  // ── Estado local para subsanación (panel evaluador) ──
+  const [notasDraft, setNotasDraft] = useState({}); // bp_id -> texto en curso de edición
+
+  // ── Estado local para el modal de borrado (doble confirmación) ──
+  const [borrarModalProceso, setBorrarModalProceso] = useState(null);
+  const [borrarConfirmTexto, setBorrarConfirmTexto] = useState('');
+
   useEffect(() => {
     (async () => {
       const session = await getSession();
@@ -87,8 +96,10 @@ export default function Admin() {
       const [s, p] = await Promise.all([getSolicitudes(), getProcesos()]);
       setSolicitudes(s);
       setProcesos(p);
+      return { solicitudes: s, procesos: p };
     } catch (e) {
       setErrorPanel('No se pudieron cargar los datos: ' + (e.message || e));
+      return { solicitudes: [], procesos: [] };
     }
   }
 
@@ -175,10 +186,150 @@ export default function Admin() {
     try {
       const ev = await getEvaluacion(proceso.id);
       setEvalProceso(ev);
+      setNotasDraft({});
     } catch (e) {
       setErrorPanel('No se pudieron cargar las aportaciones: ' + (e.message || e));
     } finally {
       setCargandoEval(false);
+    }
+  }
+
+  // Vuelve a cargar tanto el detalle del proceso actual (aportaciones)
+  // como el listado general, tras cualquier acción que cambie su estado.
+  // Recibe el ID del proceso (no el objeto, que podría estar
+  // desactualizado) y recarga tanto el listado general como el detalle,
+  // usando el dato FRESCO recién traído de BD — no el que teníamos antes
+  // de la acción, que ya tendría el estado antiguo.
+  async function refrescarTodo(procesoId) {
+    const { procesos: freshProcesos } = await recargar();
+    const fresh = freshProcesos.find((x) => x.id === procesoId) || null;
+    if (fresh) {
+      setDetalleProceso(fresh);
+      await abrirProceso(fresh);
+    }
+  }
+
+  // ── Máquina de estados: acciones del evaluador ──
+
+  async function handleIniciarEvaluacion(proceso) {
+    setAccionando(true);
+    try {
+      const actualizado = await iniciarEvaluacion(proceso.id);
+      setAviso(`Proceso ${proceso.num_identificativo} pasado a "En evaluación".`);
+      await refrescarTodo(proceso.id);
+    } catch (e) {
+      setErrorPanel('No se pudo iniciar la evaluación: ' + (e.message || e));
+    } finally {
+      setAccionando(false);
+    }
+  }
+
+  // Marca/desmarca un estándar como "requiere subsanación", con su nota.
+  async function toggleSubsanacion(bp, aportacionId, requiereActual) {
+    const nuevoRequiere = !requiereActual;
+    const nota = nuevoRequiere ? (notasDraft[bp.id] ?? evalProceso.subsanacion[bp.id]?.nota ?? '') : null;
+    setAccionando(true);
+    try {
+      await marcarSubsanacionAportacion(aportacionId, nuevoRequiere, nota);
+      await abrirProceso(detalleProceso);
+    } catch (e) {
+      setErrorPanel('No se pudo actualizar la subsanación: ' + (e.message || e));
+    } finally {
+      setAccionando(false);
+    }
+  }
+
+  // Guarda solo el texto de la nota (sin cambiar el flag), útil cuando
+  // el admin ya marcó el estándar y quiere ajustar el detalle después.
+  async function guardarNota(aportacionId, requiereActual, texto) {
+    setAccionando(true);
+    try {
+      await marcarSubsanacionAportacion(aportacionId, requiereActual, texto);
+      await abrirProceso(detalleProceso);
+    } catch (e) {
+      setErrorPanel('No se pudo guardar la nota: ' + (e.message || e));
+    } finally {
+      setAccionando(false);
+    }
+  }
+
+  async function handleEnviarSubsanacion(proceso) {
+    if (!window.confirm('¿Enviar este proceso a subsanación? Se enviará un email al solicitante con el detalle de qué corregir.')) return;
+    setAccionando(true);
+    try {
+      const resultado = await enviarASubsanacion(proceso.id);
+      setAviso(
+        `Proceso ${resultado.num_identificativo} enviado a subsanación. Email enviado a ${resultado.enviado_a} (status ${resultado.email_status}) con ${resultado.estandares_notificados} estándar(es) detallado(s).`
+      );
+      await refrescarTodo(proceso.id);
+    } catch (e) {
+      setErrorPanel('No se pudo enviar a subsanación: ' + (e.message || e));
+    } finally {
+      setAccionando(false);
+    }
+  }
+
+  async function handleEvaluacionFinal(proceso, tipo) {
+    const s = calcStats(evalProceso.state, tipo);
+    const codigo = getNivelCodigo(s);
+    const etiqueta = NIVEL_LABELS[codigo];
+    if (
+      !window.confirm(
+        `¿Cerrar la evaluación final?\n\nNivel calculado según los datos actuales: ${etiqueta}\n\nSe enviará un email al solicitante anunciando el nivel conseguido y el aviso del certificado oficial.`
+      )
+    )
+      return;
+    setAccionando(true);
+    try {
+      const resultado = await evaluacionFinal(proceso.id, codigo);
+      setAviso(
+        `Evaluación final registrada. Nivel: ${etiqueta}. Email enviado a ${resultado.enviado_a} (status ${resultado.email_status}).`
+      );
+      await refrescarTodo(proceso.id);
+    } catch (e) {
+      setErrorPanel('No se pudo completar la evaluación final: ' + (e.message || e));
+    } finally {
+      setAccionando(false);
+    }
+  }
+
+  async function handleReabrir(proceso) {
+    if (
+      !window.confirm(
+        `¿Reabrir excepcionalmente el proceso ${proceso.num_identificativo}?\n\nVolverá a "En autoevaluación" y se perderán las marcas de cierre/evaluación final. Úsalo solo a petición expresa del solicitante.`
+      )
+    )
+      return;
+    setAccionando(true);
+    try {
+      await reabrirProceso(proceso.id);
+      setAviso(`Proceso ${proceso.num_identificativo} reabierto excepcionalmente.`);
+      await refrescarTodo(proceso.id);
+    } catch (e) {
+      setErrorPanel('No se pudo reabrir: ' + (e.message || e));
+    } finally {
+      setAccionando(false);
+    }
+  }
+
+  async function confirmarBorrado() {
+    if (borrarConfirmTexto.trim().toUpperCase() !== 'BORRAR') return;
+    const proceso = borrarModalProceso;
+    setAccionando(true);
+    try {
+      const resultado = await borrarProceso(proceso.id);
+      setBorrarModalProceso(null);
+      setBorrarConfirmTexto('');
+      setDetalleProceso(null);
+      setEvalProceso(null);
+      setAviso(
+        `Proceso ${resultado.num_identificativo} borrado. Se eliminaron ${resultado.aportaciones_borradas} aportación(es) y ${resultado.evidencias_borradas} evidencia(s).`
+      );
+      await recargar();
+    } catch (e) {
+      setErrorPanel('No se pudo borrar el proceso: ' + (e.message || e));
+    } finally {
+      setAccionando(false);
     }
   }
 
@@ -228,13 +379,23 @@ export default function Admin() {
     );
   }
 
-  // ── Detalle de una solicitud ──
-  // ── Detalle de aportaciones de un proceso ──
+  // ── Detalle de aportaciones de un proceso (vista del evaluador) ──
   if (detalleProceso) {
     const p = detalleProceso;
     const tipo = p.tipo_institucion;
     const s = evalProceso ? calcStats(evalProceso.state, tipo) : null;
     const nv = s ? getNivel(s) : null;
+    const puedeIniciarEvaluacion = p.estado === 'cerrada';
+    const puedeMarcarSubsanacion = p.estado === 'en_evaluacion';
+    const puedeEnviarSubsanacion = p.estado === 'en_evaluacion';
+    const puedeEvaluacionFinal = p.estado === 'en_evaluacion';
+    const puedeReabrir = ['cerrada', 'en_evaluacion', 'en_subsanacion', 'en_revision_final'].includes(p.estado);
+
+    const itemsSubsanacion = evalProceso
+      ? Object.entries(evalProceso.subsanacion || {})
+          .filter(([, v]) => v.requiere)
+          .map(([bpId, v]) => ({ bpId, ...v, texto: BPS.find((b) => b.id === bpId)?.text || bpId }))
+      : [];
 
     return (
       <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column' }}>
@@ -249,21 +410,75 @@ export default function Admin() {
           </div>
         </header>
         <div style={{ flex: 1, padding: 16, maxWidth: 640, margin: '0 auto', width: '100%' }}>
+          {errorPanel && (
+            <div style={{ background: '#FDECEA', border: '1px solid var(--red)', borderRadius: 'var(--rs)', padding: 12, fontSize: 12, fontWeight: 700, color: 'var(--red)', marginBottom: 14 }}>
+              {errorPanel}
+            </div>
+          )}
+          {aviso && (
+            <div style={{ background: '#F1F8F1', border: '1px solid #A5D6A7', borderRadius: 'var(--rs)', padding: 12, fontSize: 12, fontWeight: 700, color: '#2E7D32', marginBottom: 14, lineHeight: 1.5 }}>
+              {aviso}
+            </div>
+          )}
+
+          {/* ── Acciones de la máquina de estados ── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+            {puedeIniciarEvaluacion && (
+              <button className="exp-btn" disabled={accionando} onClick={() => handleIniciarEvaluacion(p)}>
+                🔍 Iniciar evaluación
+              </button>
+            )}
+            {puedeEnviarSubsanacion && (
+              <button
+                className="exp-btn"
+                style={{ background: '#FF7043' }}
+                disabled={accionando || itemsSubsanacion.length === 0}
+                onClick={() => handleEnviarSubsanacion(p)}
+                title={itemsSubsanacion.length === 0 ? 'Marca al menos un estándar como "requiere subsanación" primero' : ''}
+              >
+                ⚠ Enviar a subsanación ({itemsSubsanacion.length} marcado{itemsSubsanacion.length === 1 ? '' : 's'})
+              </button>
+            )}
+            {puedeEvaluacionFinal && (
+              <button
+                className="exp-btn"
+                style={{ background: '#4CAF50' }}
+                disabled={accionando}
+                onClick={() => handleEvaluacionFinal(p, tipo)}
+              >
+                🏁 Cerrar evaluación final
+              </button>
+            )}
+            {puedeReabrir && (
+              <button
+                className="lock-btn"
+                style={{ borderColor: '#FFB300', color: '#FF8F00' }}
+                disabled={accionando}
+                onClick={() => handleReabrir(p)}
+              >
+                ↺ Reabrir proceso (excepcional)
+              </button>
+            )}
+            <button
+              className="lock-btn"
+              style={{ borderColor: 'var(--red)', color: 'var(--red)' }}
+              disabled={accionando}
+              onClick={() => {
+                setBorrarModalProceso(p);
+                setBorrarConfirmTexto('');
+              }}
+            >
+              🗑️ Borrar proceso (irreversible)
+            </button>
+          </div>
+
           {cargandoEval && <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>Cargando aportaciones…</div>}
 
           {!cargandoEval && evalProceso && (
             <>
-              <div
-                style={{
-                  background: nv.color,
-                  borderRadius: 'var(--r)',
-                  padding: 16,
-                  marginBottom: 16,
-                  color: 'white',
-                }}
-              >
+              <div style={{ background: nv.color, borderRadius: 'var(--r)', padding: 16, marginBottom: 16, color: 'white' }}>
                 <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.05em', opacity: 0.85 }}>
-                  Nivel del Distintivo
+                  Nivel del Distintivo (calculado)
                 </div>
                 <div style={{ fontSize: 18, fontWeight: 900, marginTop: 4 }}>{nv.txt}</div>
                 <div style={{ fontSize: 12, marginTop: 4, opacity: 0.9 }}>{nv.sub}</div>
@@ -272,38 +487,100 @@ export default function Admin() {
                 </div>
               </div>
 
+              {p.nivel_conseguido && (
+                <div style={{ background: '#E8F5E9', border: '1px solid #4CAF50', borderRadius: 'var(--rs)', padding: 12, marginBottom: 16, fontSize: 13, fontWeight: 800, color: '#1B5E20' }}>
+                  ✔ Nivel final registrado: {NIVEL_LABELS[p.nivel_conseguido]}
+                </div>
+              )}
+
+              {/* Informe de subsanaciones — mismo contenido que ve el
+                  solicitante en su Dashboard. */}
+              {itemsSubsanacion.length > 0 && (
+                <div style={{ background: '#FFF3E0', border: '1px solid #FFB74D', borderRadius: 'var(--rs)', padding: 14, marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 900, color: '#E65100', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 8 }}>
+                    ⚠ Informe de subsanaciones ({itemsSubsanacion.length})
+                  </div>
+                  {itemsSubsanacion.map((it) => (
+                    <div key={it.bpId} style={{ fontSize: 12, marginBottom: 6 }}>
+                      <strong style={{ color: '#E65100' }}>{it.bpId}</strong> — {it.texto}: {it.nota || '(sin nota)'}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {[1, 2, 3, 4, 5, 6, 7].map((dim) => {
                 const bpsDelDim = BPS.filter((bp) => bp.dim === dim && isActive(bp, tipo));
                 if (bpsDelDim.length === 0) return null;
                 return (
                   <div key={dim} style={{ marginBottom: 8 }}>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        fontWeight: 900,
-                        color: 'var(--turq)',
-                        margin: '16px 0 8px',
-                        textTransform: 'uppercase',
-                        letterSpacing: '.04em',
-                      }}
-                    >
+                    <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--turq)', margin: '16px 0 8px', textTransform: 'uppercase', letterSpacing: '.04em' }}>
                       {DIM_NAMES[dim]}
                     </div>
-                    {bpsDelDim.map((bp) => (
-                      <BpCard
-                        key={bp.id}
-                        bp={bp}
-                        checked={!!evalProceso.state[bp.id]}
-                        obsValue={evalProceso.obs[bp.id]}
-                        files={evalProceso.files[bp.id]}
-                        hidden={false}
-                        locked={true}
-                        onToggle={() => {}}
-                        onObs={() => {}}
-                        onAddFile={() => {}}
-                        onRemoveFile={() => {}}
-                      />
-                    ))}
+                    {bpsDelDim.map((bp) => {
+                      const sub = evalProceso.subsanacion[bp.id] || {};
+                      return (
+                        <div key={bp.id} style={{ marginBottom: 6 }}>
+                          <BpCard
+                            bp={bp}
+                            checked={!!evalProceso.state[bp.id]}
+                            obsValue={evalProceso.obs[bp.id]}
+                            files={evalProceso.files[bp.id]}
+                            hidden={false}
+                            locked={true}
+                            requiereSubsanacion={sub.requiere}
+                            notaSubsanacion={sub.nota}
+                            onToggle={() => {}}
+                            onObs={() => {}}
+                            onAddFile={() => {}}
+                            onRemoveFile={() => {}}
+                          />
+                          {/* Control del evaluador para marcar subsanación,
+                              solo disponible mientras el proceso está
+                              "en_evaluacion". */}
+                          {puedeMarcarSubsanacion && (
+                            <div
+                              style={{
+                                background: '#FAFAFA',
+                                border: '1px solid #EEE',
+                                borderTop: 'none',
+                                borderRadius: '0 0 10px 10px',
+                                padding: 10,
+                                marginTop: -6,
+                                fontSize: 12,
+                              }}
+                            >
+                              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, cursor: 'pointer' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={!!sub.requiere}
+                                  onChange={() => toggleSubsanacion(bp, sub.aportacionId, !!sub.requiere)}
+                                />
+                                Requiere subsanación
+                              </label>
+                              {sub.requiere && (
+                                <div style={{ marginTop: 6, display: 'flex', gap: 6 }}>
+                                  <input
+                                    type="text"
+                                    placeholder="¿Qué debe corregir el solicitante?"
+                                    value={notasDraft[bp.id] ?? sub.nota ?? ''}
+                                    onChange={(e) => setNotasDraft((prev) => ({ ...prev, [bp.id]: e.target.value }))}
+                                    style={{ flex: 1, padding: '6px 8px', borderRadius: 6, border: '1px solid #DDD', fontSize: 12 }}
+                                  />
+                                  <button
+                                    className="exp-btn"
+                                    style={{ padding: '6px 12px', fontSize: 11, width: 'auto' }}
+                                    disabled={accionando}
+                                    onClick={() => guardarNota(sub.aportacionId, true, notasDraft[bp.id] ?? sub.nota ?? '')}
+                                  >
+                                    Guardar
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               })}
@@ -316,12 +593,56 @@ export default function Admin() {
             onClick={() => {
               setDetalleProceso(null);
               setEvalProceso(null);
+              setAviso('');
+              setErrorPanel('');
             }}
           >
             ← Volver al listado
           </button>
         </div>
         <BrandFooter />
+
+        {/* Modal de borrado — doble confirmación escribiendo "BORRAR" */}
+        <div className={`modal-overlay${borrarModalProceso ? ' open' : ''}`}>
+          <div className="modal-box">
+            <div className="modal-icon">🗑️</div>
+            <div className="modal-title">Borrar proceso {borrarModalProceso?.num_identificativo}</div>
+            <div className="modal-text">
+              Esta acción es <strong>irreversible</strong>: se eliminarán todas las aportaciones,
+              evidencias (incluidos los archivos PDF) y el proceso completo. Pensado solo para
+              limpieza de pruebas.
+              <br />
+              <br />
+              Escribe <strong>BORRAR</strong> para confirmar:
+            </div>
+            <input
+              type="text"
+              value={borrarConfirmTexto}
+              onChange={(e) => setBorrarConfirmTexto(e.target.value)}
+              style={{ width: '100%', padding: 10, borderRadius: 8, border: '1px solid #DDD', marginTop: 10, marginBottom: 10, textAlign: 'center', fontWeight: 800 }}
+              placeholder="BORRAR"
+            />
+            <div className="modal-btns">
+              <button
+                className="modal-btn cancel"
+                onClick={() => {
+                  setBorrarModalProceso(null);
+                  setBorrarConfirmTexto('');
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                className="modal-btn confirm"
+                style={{ background: 'var(--red)' }}
+                disabled={borrarConfirmTexto.trim().toUpperCase() !== 'BORRAR' || accionando}
+                onClick={confirmarBorrado}
+              >
+                Borrar definitivamente
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -520,13 +841,25 @@ export default function Admin() {
                 {p.centro_nombre} · {tipoLabel(p.tipo_institucion)}
                 {!p.usuario_id && ' · cuenta pendiente de crear'}
               </div>
-              <button
-                className="exp-btn"
-                style={{ marginTop: 8, padding: '6px 10px', fontSize: 12 }}
-                onClick={() => abrirProceso(p)}
-              >
-                📋 Ver aportaciones
-              </button>
+              <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                <button
+                  className="exp-btn"
+                  style={{ padding: '6px 10px', fontSize: 12, width: 'auto', flex: 1 }}
+                  onClick={() => abrirProceso(p)}
+                >
+                  📋 Ver aportaciones
+                </button>
+                <button
+                  className="lock-btn"
+                  style={{ padding: '6px 10px', fontSize: 12, width: 'auto', borderColor: 'var(--red)', color: 'var(--red)' }}
+                  onClick={() => {
+                    setBorrarModalProceso(p);
+                    setBorrarConfirmTexto('');
+                  }}
+                >
+                  🗑️
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -543,6 +876,48 @@ export default function Admin() {
         </button>
       </div>
       <BrandFooter />
+
+      {/* Modal de borrado accesible también desde el listado principal */}
+      <div className={`modal-overlay${borrarModalProceso && !detalleProceso ? ' open' : ''}`}>
+        <div className="modal-box">
+          <div className="modal-icon">🗑️</div>
+          <div className="modal-title">Borrar proceso {borrarModalProceso?.num_identificativo}</div>
+          <div className="modal-text">
+            Esta acción es <strong>irreversible</strong>: se eliminarán todas las aportaciones,
+            evidencias (incluidos los archivos PDF) y el proceso completo. Pensado solo para
+            limpieza de pruebas.
+            <br />
+            <br />
+            Escribe <strong>BORRAR</strong> para confirmar:
+          </div>
+          <input
+            type="text"
+            value={borrarConfirmTexto}
+            onChange={(e) => setBorrarConfirmTexto(e.target.value)}
+            style={{ width: '100%', padding: 10, borderRadius: 8, border: '1px solid #DDD', marginTop: 10, marginBottom: 10, textAlign: 'center', fontWeight: 800 }}
+            placeholder="BORRAR"
+          />
+          <div className="modal-btns">
+            <button
+              className="modal-btn cancel"
+              onClick={() => {
+                setBorrarModalProceso(null);
+                setBorrarConfirmTexto('');
+              }}
+            >
+              Cancelar
+            </button>
+            <button
+              className="modal-btn confirm"
+              style={{ background: 'var(--red)' }}
+              disabled={borrarConfirmTexto.trim().toUpperCase() !== 'BORRAR' || accionando}
+              onClick={confirmarBorrado}
+            >
+              Borrar definitivamente
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

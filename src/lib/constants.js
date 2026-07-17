@@ -35,6 +35,9 @@ export const CATEGORIAS_ANEXO_I = [
 ];
 
 // ── Estados del proceso de acreditación ──
+// en_evaluacion y en_subsanacion son NUEVOS (mejora de evaluación con
+// subsanaciones). en_revision_final ya existía y ahora se reutiliza
+// para guardar el nivel conseguido (ver evaluacion.js: getNivelCodigo).
 export const ESTADOS_PROCESO = {
   SOLICITADA: 'solicitada',
   EN_REVISION: 'en_revision',
@@ -42,6 +45,8 @@ export const ESTADOS_PROCESO = {
   RECHAZADA: 'rechazada',
   EN_AUTOEVALUACION: 'en_autoevaluacion',
   CERRADA: 'cerrada',
+  EN_EVALUACION: 'en_evaluacion',
+  EN_SUBSANACION: 'en_subsanacion',
   EN_REVISION_FINAL: 'en_revision_final',
 };
 
@@ -51,9 +56,36 @@ export const ESTADO_LABELS = {
   aprobada: 'Aprobada',
   rechazada: 'Rechazada',
   en_autoevaluacion: 'En autoevaluación',
-  cerrada: 'Cerrada',
-  en_revision_final: 'En revisión final',
+  cerrada: 'Cierre (pendiente de evaluación)',
+  en_evaluacion: 'En evaluación',
+  en_subsanacion: 'Subsanación requerida',
+  en_revision_final: 'Evaluación final',
 };
+
+// Colores para los badges de estado (Admin.jsx los usa como ESTADO_COLOR;
+// se mantiene aquí también por si conviene centralizarlo más adelante).
+export const ESTADO_COLOR = {
+  solicitada: '#F5C800',
+  en_revision: '#00B8C8',
+  aprobada: '#4CAF50',
+  rechazada: '#E53935',
+  en_autoevaluacion: '#00B8C8',
+  cerrada: '#7E57C2',
+  en_evaluacion: '#2196F3',
+  en_subsanacion: '#FF7043',
+  en_revision_final: '#4CAF50',
+};
+
+// Pasos del "stepper" de estado para el dashboard del solicitante.
+// Deliberadamente NO incluye solicitada/en_revision/aprobada/rechazada
+// (esos son de la solicitud, no del proceso ya aprobado).
+export const PASOS_PROCESO = [
+  { estado: 'en_autoevaluacion', label: 'Autoevaluación' },
+  { estado: 'cerrada', label: 'Cierre' },
+  { estado: 'en_evaluacion', label: 'Evaluación' },
+  { estado: 'en_subsanacion', label: 'Subsanación' },
+  { estado: 'en_revision_final', label: 'Evaluación final' },
+];
 
 // ── Número identificativo: SOL-YYYY-NNN-XX ──
 // IMPORTANTE: la generación definitiva será en servidor (Postgres, Fase D).

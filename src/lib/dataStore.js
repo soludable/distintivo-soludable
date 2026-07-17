@@ -199,6 +199,76 @@ export async function rechazarSolicitud(solicitudId, motivo = null) {
   return data;
 }
 
+// ── Admin: máquina de estados de evaluación ──────────────────
+
+// cerrada -> en_evaluacion (el admin empieza a revisar).
+export async function iniciarEvaluacion(procesoId) {
+  const { data, error } = await supabase.rpc('fn_iniciar_evaluacion', {
+    p_proceso_id: procesoId,
+  });
+  if (error) throw error;
+  return data;
+}
+
+// Marca (o desmarca) un estándar concreto como "requiere subsanación",
+// con la nota explicando qué debe corregir el solicitante. Se hace con
+// un UPDATE normal (no RPC) porque la política RLS ya permite a un
+// admin editar aportaciones sin restricción (is_admin() en la policy).
+export async function marcarSubsanacionAportacion(aportacionId, requiere, nota) {
+  const { error } = await supabase
+    .from('aportaciones')
+    .update({ requiere_subsanacion: requiere, nota_subsanacion: nota ?? null })
+    .eq('id', aportacionId);
+  if (error) throw error;
+}
+
+// en_evaluacion -> en_subsanacion (exige al menos un estándar marcado).
+// Edge Function: hace la transición Y envía el email con el detalle de
+// qué debe corregir el solicitante, en un solo paso.
+export async function enviarASubsanacion(procesoId) {
+  const { data, error } = await supabase.functions.invoke('enviar-subsanacion', {
+    body: { proceso_id: procesoId },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
+// en_evaluacion -> en_revision_final, con el nivel conseguido.
+// nivelCodigo debe ser uno de: 'sin_nivel' | 'esenciales_ok' | 'avanzado' | 'excelente'
+// Edge Function: hace la transición Y envía el email anunciando el
+// nivel conseguido y el aviso del certificado oficial, en un solo paso.
+export async function evaluacionFinal(procesoId, nivelCodigo) {
+  const { data, error } = await supabase.functions.invoke('evaluacion-final', {
+    body: { proceso_id: procesoId, nivel: nivelCodigo },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
+// Reapertura excepcional: vuelve el proceso a 'en_autoevaluacion' desde
+// cualquier estado, y resetea las marcas de cierre/evaluación final.
+export async function reabrirProceso(procesoId) {
+  const { data, error } = await supabase.rpc('fn_reabrir_proceso', {
+    p_proceso_id: procesoId,
+  });
+  if (error) throw error;
+  return data;
+}
+
+// Borrado físico e irreversible de un proceso completo (evidencias +
+// aportaciones + proceso). Pensado para limpieza de pruebas. El
+// componente que llame a esto DEBE pedir doble confirmación antes.
+export async function borrarProceso(procesoId) {
+  const { data, error } = await supabase.functions.invoke('borrar-proceso', {
+    body: { proceso_id: procesoId },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
 // ── Autoevaluación (solicitante autenticado) ─────────────────
 
 // Asunción de diseño (Fase E): cada solicitante tiene UN proceso activo,
@@ -220,17 +290,24 @@ export async function getMiProceso() {
 }
 
 // Carga aportaciones + evidencias del proceso y las adapta a la forma
-// {state, obs, files} que ya conocen los componentes (BpCard, Dashboard).
+// {state, obs, files, subsanacion} que conocen los componentes (BpCard,
+// Dashboard). `subsanacion` es nuevo: mapa bp_id -> {aportacionId,
+// requiere, nota}, usado tanto por el panel admin (para marcar/leer
+// qué hay que corregir) como por la autoevaluación del solicitante
+// (para saber qué estándares puede tocar durante 'en_subsanacion').
 export async function getEvaluacion(procesoId) {
   const { data, error } = await supabase
     .from('aportaciones')
-    .select('id, bp_id, cumplido, observaciones, evidencias(id, storage_path, filename, size)')
+    .select(
+      'id, bp_id, cumplido, observaciones, requiere_subsanacion, nota_subsanacion, evidencias(id, storage_path, filename, size)'
+    )
     .eq('proceso_id', procesoId);
   if (error) throw error;
 
   const state = {};
   const obs = {};
   const files = {};
+  const subsanacion = {};
   for (const row of data) {
     state[row.bp_id] = row.cumplido;
     obs[row.bp_id] = row.observaciones || '';
@@ -240,8 +317,13 @@ export async function getEvaluacion(procesoId) {
       size: ev.size,
       path: ev.storage_path,
     }));
+    subsanacion[row.bp_id] = {
+      aportacionId: row.id,
+      requiere: !!row.requiere_subsanacion,
+      nota: row.nota_subsanacion || '',
+    };
   }
-  return { state, obs, files };
+  return { state, obs, files, subsanacion };
 }
 
 // Upsert de una aportación (marcar/desmarcar cumplido y/o observaciones).
