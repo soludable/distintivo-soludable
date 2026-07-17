@@ -17,6 +17,7 @@ import {
   evaluacionFinal,
   reabrirProceso,
   borrarProceso,
+  borrarSolicitud,
 } from '../../lib/dataStore.js';
 import {
   CATEGORIAS_ANEXO_I,
@@ -75,7 +76,9 @@ export default function Admin() {
   const [notasDraft, setNotasDraft] = useState({}); // bp_id -> texto en curso de edición
 
   // ── Estado local para el modal de borrado (doble confirmación) ──
-  const [borrarModalProceso, setBorrarModalProceso] = useState(null);
+  // Modal de borrado genérico: sirve tanto para procesos como para
+  // solicitudes. `item.tipo` es 'proceso' | 'solicitud'.
+  const [borrarModal, setBorrarModal] = useState(null); // { tipo, id, label } | null
   const [borrarConfirmTexto, setBorrarConfirmTexto] = useState('');
 
   useEffect(() => {
@@ -314,20 +317,29 @@ export default function Admin() {
 
   async function confirmarBorrado() {
     if (borrarConfirmTexto.trim().toUpperCase() !== 'BORRAR') return;
-    const proceso = borrarModalProceso;
+    const item = borrarModal;
     setAccionando(true);
     try {
-      const resultado = await borrarProceso(proceso.id);
-      setBorrarModalProceso(null);
+      if (item.tipo === 'proceso') {
+        const resultado = await borrarProceso(item.id);
+        setAviso(
+          `Proceso ${resultado.num_identificativo} borrado. Se eliminaron ${resultado.aportaciones_borradas} aportación(es) y ${resultado.evidencias_borradas} evidencia(s).`
+        );
+        setDetalleProceso(null);
+        setEvalProceso(null);
+      } else {
+        const resultado = await borrarSolicitud(item.id);
+        setAviso(
+          resultado.proceso_borrado
+            ? `Solicitud "${resultado.centro_nombre || ''}" borrada, junto con su proceso (${resultado.aportaciones_borradas} aportación(es), ${resultado.evidencias_borradas} evidencia(s)).`
+            : `Solicitud "${resultado.centro_nombre || ''}" borrada.`
+        );
+      }
+      setBorrarModal(null);
       setBorrarConfirmTexto('');
-      setDetalleProceso(null);
-      setEvalProceso(null);
-      setAviso(
-        `Proceso ${resultado.num_identificativo} borrado. Se eliminaron ${resultado.aportaciones_borradas} aportación(es) y ${resultado.evidencias_borradas} evidencia(s).`
-      );
       await recargar();
     } catch (e) {
-      setErrorPanel('No se pudo borrar el proceso: ' + (e.message || e));
+      setErrorPanel(`No se pudo borrar ${item.tipo === 'proceso' ? 'el proceso' : 'la solicitud'}: ` + (e.message || e));
     } finally {
       setAccionando(false);
     }
@@ -464,7 +476,7 @@ export default function Admin() {
               style={{ borderColor: 'var(--red)', color: 'var(--red)' }}
               disabled={accionando}
               onClick={() => {
-                setBorrarModalProceso(p);
+                setBorrarModal({ tipo: 'proceso', id: p.id, label: p.num_identificativo });
                 setBorrarConfirmTexto('');
               }}
             >
@@ -603,14 +615,18 @@ export default function Admin() {
         <BrandFooter />
 
         {/* Modal de borrado — doble confirmación escribiendo "BORRAR" */}
-        <div className={`modal-overlay${borrarModalProceso ? ' open' : ''}`}>
+        <div className={`modal-overlay${borrarModal ? ' open' : ''}`}>
           <div className="modal-box">
             <div className="modal-icon">🗑️</div>
-            <div className="modal-title">Borrar proceso {borrarModalProceso?.num_identificativo}</div>
+            <div className="modal-title">
+              Borrar {borrarModal?.tipo === 'solicitud' ? 'solicitud' : 'proceso'} {borrarModal?.label}
+            </div>
             <div className="modal-text">
-              Esta acción es <strong>irreversible</strong>: se eliminarán todas las aportaciones,
-              evidencias (incluidos los archivos PDF) y el proceso completo. Pensado solo para
-              limpieza de pruebas.
+              Esta acción es <strong>irreversible</strong>:{' '}
+              {borrarModal?.tipo === 'solicitud'
+                ? 'se eliminará la solicitud y, si ya tiene un proceso de acreditación vinculado, también ese proceso completo con sus aportaciones y evidencias.'
+                : 'se eliminarán todas las aportaciones, evidencias (incluidos los archivos PDF) y el proceso completo.'}{' '}
+              Pensado solo para limpieza de pruebas.
               <br />
               <br />
               Escribe <strong>BORRAR</strong> para confirmar:
@@ -626,7 +642,7 @@ export default function Admin() {
               <button
                 className="modal-btn cancel"
                 onClick={() => {
-                  setBorrarModalProceso(null);
+                  setBorrarModal(null);
                   setBorrarConfirmTexto('');
                 }}
               >
@@ -789,31 +805,45 @@ export default function Admin() {
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
           {solicitudes.map((s) => (
-            <button
+            <div
               key={s.id}
-              onClick={() => setDetalle(s)}
               style={{
-                textAlign: 'left',
                 background: 'white',
-                border: 'none',
                 borderRadius: 'var(--rs)',
                 padding: 12,
                 boxShadow: '0 1px 6px rgba(0,0,0,.07)',
                 borderLeft: `4px solid ${ESTADO_COLOR[s.estado] || '#BDBDBD'}`,
-                cursor: 'pointer',
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--text)' }}>
-                  {s.centro_nombre || categoriaLabel(s.categoria)}
-                </span>
-                <Badge estado={s.estado} />
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, fontWeight: 600 }}>
-                {categoriaLabel(s.categoria)} · {s.provincias?.nombre || '—'}
-                {s.num_identificativo ? ` · ${s.num_identificativo}` : ''}
-              </div>
-            </button>
+              <button
+                onClick={() => setDetalle(s)}
+                style={{ textAlign: 'left', background: 'none', border: 'none', padding: 0, width: '100%', cursor: 'pointer' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--text)' }}>
+                    {s.centro_nombre || categoriaLabel(s.categoria)}
+                  </span>
+                  <Badge estado={s.estado} />
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, fontWeight: 600 }}>
+                  {categoriaLabel(s.categoria)} · {s.provincias?.nombre || '—'}
+                  {s.num_identificativo ? ` · ${s.num_identificativo}` : ''}
+                </div>
+              </button>
+              <button
+                className="lock-btn"
+                style={{ padding: '4px 10px', fontSize: 11, width: 'auto', marginTop: 8, borderColor: 'var(--red)', color: 'var(--red)' }}
+                onClick={() =>
+                  setBorrarModal({
+                    tipo: 'solicitud',
+                    id: s.id,
+                    label: s.centro_nombre || categoriaLabel(s.categoria),
+                  })
+                }
+              >
+                🗑️ Borrar solicitud
+              </button>
+            </div>
           ))}
         </div>
 
@@ -853,7 +883,7 @@ export default function Admin() {
                   className="lock-btn"
                   style={{ padding: '6px 10px', fontSize: 12, width: 'auto', borderColor: 'var(--red)', color: 'var(--red)' }}
                   onClick={() => {
-                    setBorrarModalProceso(p);
+                    setBorrarModal({ tipo: 'proceso', id: p.id, label: p.num_identificativo });
                     setBorrarConfirmTexto('');
                   }}
                 >
@@ -878,14 +908,18 @@ export default function Admin() {
       <BrandFooter />
 
       {/* Modal de borrado accesible también desde el listado principal */}
-      <div className={`modal-overlay${borrarModalProceso && !detalleProceso ? ' open' : ''}`}>
+      <div className={`modal-overlay${borrarModal && !detalleProceso ? ' open' : ''}`}>
         <div className="modal-box">
           <div className="modal-icon">🗑️</div>
-          <div className="modal-title">Borrar proceso {borrarModalProceso?.num_identificativo}</div>
+          <div className="modal-title">
+            Borrar {borrarModal?.tipo === 'solicitud' ? 'solicitud' : 'proceso'} {borrarModal?.label}
+          </div>
           <div className="modal-text">
-            Esta acción es <strong>irreversible</strong>: se eliminarán todas las aportaciones,
-            evidencias (incluidos los archivos PDF) y el proceso completo. Pensado solo para
-            limpieza de pruebas.
+            Esta acción es <strong>irreversible</strong>:{' '}
+            {borrarModal?.tipo === 'solicitud'
+              ? 'se eliminará la solicitud y, si ya tiene un proceso de acreditación vinculado, también ese proceso completo con sus aportaciones y evidencias.'
+              : 'se eliminarán todas las aportaciones, evidencias (incluidos los archivos PDF) y el proceso completo.'}{' '}
+            Pensado solo para limpieza de pruebas.
             <br />
             <br />
             Escribe <strong>BORRAR</strong> para confirmar:
@@ -901,7 +935,7 @@ export default function Admin() {
             <button
               className="modal-btn cancel"
               onClick={() => {
-                setBorrarModalProceso(null);
+                setBorrarModal(null);
                 setBorrarConfirmTexto('');
               }}
             >

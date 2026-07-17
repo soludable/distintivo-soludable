@@ -269,6 +269,20 @@ export async function borrarProceso(procesoId) {
   return data;
 }
 
+// Borrado físico e irreversible de una SOLICITUD. Si ya tiene un
+// proceso vinculado, ese proceso (con su cascada completa) se borra
+// primero en servidor — la FK procesos_solicitud_id_fkey es NO ACTION
+// y bloquearía el borrado si no. El componente que llame a esto DEBE
+// pedir doble confirmación antes, igual que con borrarProceso.
+export async function borrarSolicitud(solicitudId) {
+  const { data, error } = await supabase.functions.invoke('borrar-solicitud', {
+    body: { solicitud_id: solicitudId },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
 // ── Autoevaluación (solicitante autenticado) ─────────────────
 
 // Asunción de diseño (Fase E): cada solicitante tiene UN proceso activo,
