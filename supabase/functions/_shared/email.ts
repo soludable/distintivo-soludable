@@ -1,38 +1,38 @@
 // Helper para enviar emails vía Resend, usando un dominio propio
-// verificado (doncelproject.com) — esto elimina la restricción del
-// dominio de pruebas (onboarding@resend.dev), que solo entregaba al
-// email del titular de la cuenta Resend.
+// verificado (doncelproject.com).
 //
 // Requiere:
-//   1. Dominio doncelproject.com añadido y VERIFICADO en Resend
-//      (Resend → Domains → Add Domain → añadir los registros DNS que
-//      te den en el proveedor DNS de Zoho/donde gestiones el dominio).
-//   2. Secreto RESEND_API_KEY (el mismo de antes, o uno nuevo):
+//   1. Dominio doncelproject.com añadido y VERIFICADO en Resend.
+//   2. Secreto RESEND_API_KEY:
 //        supabase secrets set RESEND_API_KEY=re_xxxxx
-//   3. Secreto REMITENTE_EMAIL con una dirección de ese dominio, ej.:
+//   3. Secreto REMITENTE_EMAIL:
 //        supabase secrets set REMITENTE_EMAIL=soludable@doncelproject.com
-//      (no hace falta que exista como buzón real en Zoho — Resend solo
-//      necesita que el DOMINIO esté verificado, no la cuenta de correo).
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
 const REMITENTE_EMAIL = Deno.env.get('REMITENTE_EMAIL') || 'soludable@doncelproject.com';
 const REMITENTE_NOMBRE = 'Distintivo Soludable';
 
-export async function enviarEmail({ to, subject, html }) {
+// CN-013: enmascara el email para los logs (ej. j***@dominio.com).
+function maskEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  if (!domain) return '***';
+  return `${local[0]}***@${domain}`;
+}
+
+export async function enviarEmail({ to, subject, html }: { to: string | string[]; subject: string; html: string }) {
   if (!RESEND_API_KEY) {
     throw new Error('Falta el secreto RESEND_API_KEY en el proyecto Supabase');
   }
   const destinatarios = Array.isArray(to) ? to : [to];
-  console.log('[email] enviando a', destinatarios, '| asunto:', subject, '| remitente:', REMITENTE_EMAIL);
 
-  // Límite de tiempo: si Resend no responde en 8s, fallamos con un error
-  // claro en vez de quedarnos colgados sin que el cliente reciba nunca
-  // respuesta (esto causó una pantalla "congelada" durante las pruebas
-  // con SendGrid — se mantiene el mismo blindaje aquí).
+  // CN-013: solo logueamos emails enmascarados, nunca la dirección completa.
+  const destinatariosMasked = destinatarios.map(maskEmail);
+  console.log('[email] enviando a', destinatariosMasked, '| asunto:', subject);
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-  let res;
+  let res: Response;
   try {
     res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -73,7 +73,7 @@ const FOOTER = `
   </div>
 `;
 
-export function plantillaEmail({ titulo, cuerpoHtml }) {
+export function plantillaEmail({ titulo, cuerpoHtml }: { titulo: string; cuerpoHtml: string }) {
   return `
   <div style="font-family:'Nunito',Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#2C2C2C;">
     <div style="background:#00B8C8;color:#fff;padding:16px 20px;border-radius:12px 12px 0 0;">

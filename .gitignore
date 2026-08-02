@@ -1,3 +1,13 @@
+# Entorno — todas las variantes posibles (CN-005)
+.env
 .env.local
+.env.*.local
+.env.production
+.env.development
+
+# Build
 node_modules
 dist
+
+# Supabase CLI — estado local temporal (CN-006)
+supabase/.temp/

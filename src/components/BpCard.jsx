@@ -16,9 +16,6 @@ const TAGS = {
   noe: { text: '○ No esencial', cls: 'tag-noe' },
 };
 
-// Estilos inline autocontenidos — no dependen de soludable.css (no
-// disponible al escribir este componente). Si se prefiere mover a
-// clases CSS propias más adelante, es un cambio directo.
 const pillBaseStyle = {
   display: 'inline-flex',
   alignItems: 'center',
@@ -61,8 +58,8 @@ export default function BpCard({
   files, // array: [{evidenciaId, name, size, path}, ...]
   hidden,
   locked,
-  requiereSubsanacion, // NUEVO: true si el evaluador pidió corrección en este estándar
-  notaSubsanacion, // NUEVO: texto de qué hay que corregir
+  requiereSubsanacion, // true si el evaluador pidió corrección en este estándar
+  notaSubsanacion,     // texto de qué hay que corregir
   onToggle,
   onObs,
   onAddFile,
@@ -109,13 +106,22 @@ export default function BpCard({
     }
   }
 
+  // CN-009: sustituido document.write por DOM API segura.
+  // La URL procede de createSignedUrl (servidor), pero el patrón
+  // anterior era frágil ante cualquier cambio futuro del origen de la URL.
   async function viewFile(f) {
     try {
       const url = await getUrlEvidencia(f.path);
       const win = window.open();
-      win.document.write(
-        `<iframe src="${url}" style="width:100%;height:100%;border:none;"></iframe>`
-      );
+      if (!win) {
+        setErr('El navegador bloqueó la ventana emergente. Permite popups para este sitio.');
+        return;
+      }
+      const iframe = win.document.createElement('iframe');
+      Object.assign(iframe.style, { width: '100%', height: '100%', border: 'none' });
+      iframe.src = url;
+      win.document.body.style.margin = '0';
+      win.document.body.appendChild(iframe);
     } catch (er) {
       setErr('No se pudo abrir el archivo: ' + (er.message || er));
     }
@@ -140,7 +146,8 @@ export default function BpCard({
     >
       {requiereSubsanacion && (
         <div style={subsanacionBannerStyle}>
-          <strong>⚠ Requiere corrección:</strong> {notaSubsanacion || 'El evaluador ha solicitado revisar este estándar.'}
+          <strong>⚠ Requiere corrección:</strong>{' '}
+          {notaSubsanacion || 'El evaluador ha solicitado revisar este estándar.'}
         </div>
       )}
 
@@ -151,8 +158,6 @@ export default function BpCard({
           style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}
         >
           <div className="bp-dot"></div>
-          {/* Aviso recordatorio: solo visible mientras el estándar NO esté
-              marcado y sea editable. Desaparece en cuanto se hace check. */}
           {!checked && !locked && (
             <div style={hintStyle}>Toca para marcar cumplido</div>
           )}

@@ -10,7 +10,7 @@
 //   3. Vincula el proceso a esa cuenta.
 //   4. Envía el email con el enlace de acceso.
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.1';
 import { corsHeaders } from '../_shared/cors.ts';
 import { enviarEmail, plantillaEmail } from '../_shared/email.ts';
 
@@ -22,8 +22,10 @@ const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 const APP_URL = Deno.env.get('APP_URL') || 'http://localhost:5173';
 
 Deno.serve(async (req) => {
+  const origin = req.headers.get('origin');
+
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response('ok', { headers: corsHeaders(origin) });
   }
 
   try {
@@ -31,7 +33,7 @@ Deno.serve(async (req) => {
     if (!authHeader) {
       return new Response(JSON.stringify({ error: 'Falta cabecera Authorization' }), {
         status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
       });
     }
 
@@ -39,7 +41,7 @@ Deno.serve(async (req) => {
     if (!solicitud_id) {
       return new Response(JSON.stringify({ error: 'Falta solicitud_id' }), {
         status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
       });
     }
 
@@ -150,12 +152,12 @@ Deno.serve(async (req) => {
         email_status: resultadoEmail.status,
         enviado_a: emailDestino,
       }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' } }
     );
   } catch (e) {
     return new Response(JSON.stringify({ error: e.message || String(e) }), {
       status: 400,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
     });
   }
 });
