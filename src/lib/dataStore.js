@@ -17,6 +17,10 @@ import { BPS } from '../data/bps.js';
 
 const BUCKET = 'evidencias';
 
+// Lista de ids válidos — se define AQUÍ para que upsertAportacion y
+// subirEvidencia puedan validar contra ella antes de tocar la BD (CN-010).
+export const BP_IDS_VALIDOS = BPS.map((b) => b.id);
+
 // ── Auth ──────────────────────────────────────────────────────
 
 export async function signIn(email, password) {
@@ -56,10 +60,6 @@ export async function getMiRol() {
   return data.role; // 'solicitante' | 'admin'
 }
 
-// Escucha cambios de sesión — en particular el evento PASSWORD_RECOVERY,
-// que supabase-js dispara solo al detectar un enlace de invitación o
-// recuperación en la URL. Se usa para mostrar la pantalla de "crea tu
-// contraseña" en vez del login normal.
 export async function actualizarPassword(nuevaPassword) {
   const { error } = await supabase.auth.updateUser({ password: nuevaPassword });
   if (error) throw error;
@@ -79,9 +79,6 @@ export async function verificarTokenAcceso(tokenHash, type) {
 
 // ── Solicitud (formulario público) ───────────────────────────
 
-// Traduce los campos camelCase del formulario a las columnas snake_case
-// reales de la tabla `solicitudes`. NO incluye tipo_derivado (lo calcula
-// un trigger en servidor) ni estado (por defecto 'solicitada').
 function mapSolicitudToRow(s) {
   return {
     centro_nombre: s.centroNombre || null,
@@ -125,7 +122,7 @@ export async function crearSolicitud(solicitud) {
   return { id };
 }
 
-// ── Catálogo geográfico (para los selects dependientes) ──────
+// ── Catálogo geográfico ───────────────────────────────────────
 
 export async function getProvincias() {
   const { data, error } = await supabase
@@ -167,9 +164,6 @@ export async function getProcesos() {
   return data;
 }
 
-// Aprobar ahora hace TODO en un paso (Edge Function): aprueba, crea la
-// cuenta del solicitante, la vincula al proceso y envía el email con el
-// enlace de acceso. Sustituye al flujo manual de Fase E1/E2.
 export async function aprobarSolicitud(solicitudId, tipoOverride = null) {
   const { data, error } = await supabase.functions.invoke('aprobar-solicitud', {
     body: { solicitud_id: solicitudId, tipo_override: tipoOverride },
@@ -179,8 +173,6 @@ export async function aprobarSolicitud(solicitudId, tipoOverride = null) {
   return data;
 }
 
-// Se mantiene por si hiciera falta vincular a mano en algún caso raro
-// (ej. el email de invitación se perdió y hay que reenlazar manualmente).
 export async function vincularProcesoUsuario(procesoId, email) {
   const { data, error } = await supabase.rpc('fn_vincular_proceso_usuario', {
     p_proceso_id: procesoId,
@@ -201,7 +193,6 @@ export async function rechazarSolicitud(solicitudId, motivo = null) {
 
 // ── Admin: máquina de estados de evaluación ──────────────────
 
-// cerrada -> en_evaluacion (el admin empieza a revisar).
 export async function iniciarEvaluacion(procesoId) {
   const { data, error } = await supabase.rpc('fn_iniciar_evaluacion', {
     p_proceso_id: procesoId,
@@ -210,10 +201,6 @@ export async function iniciarEvaluacion(procesoId) {
   return data;
 }
 
-// Marca (o desmarca) un estándar concreto como "requiere subsanación",
-// con la nota explicando qué debe corregir el solicitante. Se hace con
-// un UPDATE normal (no RPC) porque la política RLS ya permite a un
-// admin editar aportaciones sin restricción (is_admin() en la policy).
 export async function marcarSubsanacionAportacion(aportacionId, requiere, nota) {
   const { error } = await supabase
     .from('aportaciones')
@@ -222,9 +209,6 @@ export async function marcarSubsanacionAportacion(aportacionId, requiere, nota) 
   if (error) throw error;
 }
 
-// en_evaluacion -> en_subsanacion (exige al menos un estándar marcado).
-// Edge Function: hace la transición Y envía el email con el detalle de
-// qué debe corregir el solicitante, en un solo paso.
 export async function enviarASubsanacion(procesoId) {
   const { data, error } = await supabase.functions.invoke('enviar-subsanacion', {
     body: { proceso_id: procesoId },
@@ -234,10 +218,6 @@ export async function enviarASubsanacion(procesoId) {
   return data;
 }
 
-// en_evaluacion -> en_revision_final, con el nivel conseguido.
-// nivelCodigo debe ser uno de: 'sin_nivel' | 'esenciales_ok' | 'avanzado' | 'excelente'
-// Edge Function: hace la transición Y envía el email anunciando el
-// nivel conseguido y el aviso del certificado oficial, en un solo paso.
 export async function evaluacionFinal(procesoId, nivelCodigo) {
   const { data, error } = await supabase.functions.invoke('evaluacion-final', {
     body: { proceso_id: procesoId, nivel: nivelCodigo },
@@ -247,8 +227,6 @@ export async function evaluacionFinal(procesoId, nivelCodigo) {
   return data;
 }
 
-// Reapertura excepcional: vuelve el proceso a 'en_autoevaluacion' desde
-// cualquier estado, y resetea las marcas de cierre/evaluación final.
 export async function reabrirProceso(procesoId) {
   const { data, error } = await supabase.rpc('fn_reabrir_proceso', {
     p_proceso_id: procesoId,
@@ -257,9 +235,6 @@ export async function reabrirProceso(procesoId) {
   return data;
 }
 
-// Borrado físico e irreversible de un proceso completo (evidencias +
-// aportaciones + proceso). Pensado para limpieza de pruebas. El
-// componente que llame a esto DEBE pedir doble confirmación antes.
 export async function borrarProceso(procesoId) {
   const { data, error } = await supabase.functions.invoke('borrar-proceso', {
     body: { proceso_id: procesoId },
@@ -269,11 +244,6 @@ export async function borrarProceso(procesoId) {
   return data;
 }
 
-// Borrado físico e irreversible de una SOLICITUD. Si ya tiene un
-// proceso vinculado, ese proceso (con su cascada completa) se borra
-// primero en servidor — la FK procesos_solicitud_id_fkey es NO ACTION
-// y bloquearía el borrado si no. El componente que llame a esto DEBE
-// pedir doble confirmación antes, igual que con borrarProceso.
 export async function borrarSolicitud(solicitudId) {
   const { data, error } = await supabase.functions.invoke('borrar-solicitud', {
     body: { solicitud_id: solicitudId },
@@ -285,10 +255,6 @@ export async function borrarSolicitud(solicitudId) {
 
 // ── Autoevaluación (solicitante autenticado) ─────────────────
 
-// Asunción de diseño (Fase E): cada solicitante tiene UN proceso activo,
-// localizado por usuario_id = su propio auth.uid(). Si en el futuro un
-// mismo centro repite proceso (ej. año siguiente), esto habrá que
-// revisarlo — no se decide aquí en silencio.
 export async function getMiProceso() {
   const session = await getSession();
   if (!session) return null;
@@ -303,12 +269,6 @@ export async function getMiProceso() {
   return data;
 }
 
-// Carga aportaciones + evidencias del proceso y las adapta a la forma
-// {state, obs, files, subsanacion} que conocen los componentes (BpCard,
-// Dashboard). `subsanacion` es nuevo: mapa bp_id -> {aportacionId,
-// requiere, nota}, usado tanto por el panel admin (para marcar/leer
-// qué hay que corregir) como por la autoevaluación del solicitante
-// (para saber qué estándares puede tocar durante 'en_subsanacion').
 export async function getEvaluacion(procesoId) {
   const { data, error } = await supabase
     .from('aportaciones')
@@ -340,8 +300,12 @@ export async function getEvaluacion(procesoId) {
   return { state, obs, files, subsanacion };
 }
 
-// Upsert de una aportación (marcar/desmarcar cumplido y/o observaciones).
+// CN-010: validación de bp_id contra whitelist antes de tocar la BD.
 export async function upsertAportacion(procesoId, bpId, { cumplido, observaciones }) {
+  if (!BP_IDS_VALIDOS.includes(bpId)) {
+    throw new Error(`bp_id inválido: ${bpId}`);
+  }
+
   const patch = { proceso_id: procesoId, bp_id: bpId };
   if (cumplido !== undefined) patch.cumplido = cumplido;
   if (observaciones !== undefined) patch.observaciones = observaciones;
@@ -355,12 +319,12 @@ export async function upsertAportacion(procesoId, bpId, { cumplido, observacione
   return data;
 }
 
-// Sube un PDF de evidencia a Storage y registra su metadato. Se pueden
-// subir VARIOS por estándar (hasta MAX_ARCHIVOS_POR_BP) — el prefijo
-// aleatorio evita que dos archivos con el mismo nombre se pisen entre sí.
-// Ruta: {uid}/{proceso_id}/{bp_id}/{prefijo}-{filename} — el primer
-// segmento debe ser el propio uid, así lo exige la política de Storage.
+// CN-010: validación de bp_id contra whitelist antes de tocar la BD.
 export async function subirEvidencia(procesoId, bpId, file) {
+  if (!BP_IDS_VALIDOS.includes(bpId)) {
+    throw new Error(`bp_id inválido: ${bpId}`);
+  }
+
   const session = await getSession();
   if (!session) throw new Error('No hay sesión activa');
 
@@ -408,6 +372,3 @@ export async function cerrarEvaluacion(procesoId) {
   if (error) throw error;
   return data;
 }
-
-// Lista de ids válidos, útil para validar antes de tocar la BD.
-export const BP_IDS_VALIDOS = BPS.map((b) => b.id);

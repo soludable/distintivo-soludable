@@ -9,7 +9,7 @@
 // Pensado para limpieza de pruebas — el frontend debe exigir doble
 // confirmación (escribir "BORRAR" a mano) antes de llamar aquí.
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.1';
 import { corsHeaders } from '../_shared/cors.ts';
 import { borrarProcesoCascada } from '../_shared/borrarProcesoCascada.ts';
 
@@ -17,24 +17,26 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY');
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
-function jsonResponse(status: number, body: unknown) {
+function jsonResponse(status: number, body: unknown, origin: string | null) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
   });
 }
 
 Deno.serve(async (req) => {
+  const origin = req.headers.get('origin');
+
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response('ok', { headers: corsHeaders(origin) });
   }
 
   try {
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) return jsonResponse(401, { error: 'Falta cabecera Authorization' });
+    if (!authHeader) return jsonResponse(401, { error: 'Falta cabecera Authorization' }, origin);
 
     const { solicitud_id } = await req.json();
-    if (!solicitud_id) return jsonResponse(400, { error: 'Falta solicitud_id' });
+    if (!solicitud_id) return jsonResponse(400, { error: 'Falta solicitud_id' }, origin);
 
     const userClient = createClient(SUPABASE_URL, ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
@@ -42,7 +44,7 @@ Deno.serve(async (req) => {
 
     const { data: userData, error: errUser } = await userClient.auth.getUser();
     if (errUser || !userData?.user) {
-      return jsonResponse(401, { error: 'No se pudo identificar al usuario' });
+      return jsonResponse(401, { error: 'No se pudo identificar al usuario' }, origin);
     }
 
     const { data: perfil, error: errPerfil } = await userClient
@@ -51,7 +53,7 @@ Deno.serve(async (req) => {
       .eq('id', userData.user.id)
       .single();
     if (errPerfil || perfil?.role !== 'admin') {
-      return jsonResponse(403, { error: 'Solo un administrador puede borrar una solicitud' });
+      return jsonResponse(403, { error: 'Solo un administrador puede borrar una solicitud' }, origin);
     }
 
     const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
@@ -62,7 +64,7 @@ Deno.serve(async (req) => {
       .eq('id', solicitud_id)
       .single();
     if (errSol || !solicitud) {
-      return jsonResponse(404, { error: 'Solicitud no encontrada' });
+      return jsonResponse(404, { error: 'Solicitud no encontrada' }, origin);
     }
 
     // ¿Tiene un proceso de acreditación vinculado? Si lo tiene, hay que
@@ -88,8 +90,8 @@ Deno.serve(async (req) => {
       centro_nombre: solicitud.centro_nombre,
       proceso_borrado: !!procesoVinculado,
       ...resultadoProceso,
-    });
+    }, origin);
   } catch (e) {
-    return jsonResponse(400, { error: e.message || String(e) });
+    return jsonResponse(400, { error: e.message || String(e) }, origin);
   }
 });

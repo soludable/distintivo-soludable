@@ -7,7 +7,7 @@
 //   2. Envía al solicitante un email anunciando el nivel conseguido
 //      y el aviso del certificado oficial.
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.1';
 import { corsHeaders } from '../_shared/cors.ts';
 import { enviarEmail, plantillaEmail } from '../_shared/email.ts';
 
@@ -24,25 +24,27 @@ const NIVEL_LABELS_ES: Record<string, string> = {
   excelente: 'Excelente',
 };
 
-function jsonResponse(status: number, body: unknown) {
+function jsonResponse(status: number, body: unknown, origin: string | null) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
   });
 }
 
 Deno.serve(async (req) => {
+  const origin = req.headers.get('origin');
+
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response('ok', { headers: corsHeaders(origin) });
   }
 
   try {
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) return jsonResponse(401, { error: 'Falta cabecera Authorization' });
+    if (!authHeader) return jsonResponse(401, { error: 'Falta cabecera Authorization' }, origin);
 
     const { proceso_id, nivel } = await req.json();
-    if (!proceso_id) return jsonResponse(400, { error: 'Falta proceso_id' });
-    if (!nivel) return jsonResponse(400, { error: 'Falta nivel' });
+    if (!proceso_id) return jsonResponse(400, { error: 'Falta proceso_id' }, origin);
+    if (!nivel) return jsonResponse(400, { error: 'Falta nivel' }, origin);
 
     const userClient = createClient(SUPABASE_URL, ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
@@ -97,8 +99,8 @@ Deno.serve(async (req) => {
       nivel,
       email_status: resultadoEmail.status,
       enviado_a: emailDestino,
-    });
+    }, origin);
   } catch (e) {
-    return jsonResponse(400, { error: e.message || String(e) });
+    return jsonResponse(400, { error: e.message || String(e) }, origin);
   }
 });

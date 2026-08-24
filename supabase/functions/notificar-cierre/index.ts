@@ -7,6 +7,7 @@
 //
 // Configura el webhook igual que notificar-solicitud (misma cabecera secreta).
 
+import { timingSafeEqual } from 'https://deno.land/std@0.224.0/crypto/timing_safe_equal.ts';
 import { corsHeaders } from '../_shared/cors.ts';
 import { enviarEmail, plantillaEmail } from '../_shared/email.ts';
 
@@ -14,11 +15,21 @@ const WEBHOOK_SECRET = Deno.env.get('WEBHOOK_SECRET');
 const EMAIL_ADMIN = 'soludable.digital@gmail.com';
 
 Deno.serve(async (req) => {
+  const origin = req.headers.get('origin');
+
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response('ok', { headers: corsHeaders(origin) });
   }
 
-  if (req.headers.get('x-webhook-secret') !== WEBHOOK_SECRET) {
+  // Comparación de tiempo constante para el secreto del webhook (CN-012).
+  const provided = req.headers.get('x-webhook-secret') || '';
+  const enc = new TextEncoder();
+  const secretOk =
+    WEBHOOK_SECRET &&
+    provided.length === WEBHOOK_SECRET.length &&
+    timingSafeEqual(enc.encode(provided), enc.encode(WEBHOOK_SECRET));
+
+  if (!secretOk) {
     return new Response(JSON.stringify({ error: 'No autorizado' }), { status: 401 });
   }
 
@@ -30,7 +41,7 @@ Deno.serve(async (req) => {
     // Solo nos interesa el instante en que pasa a 'cerrada'.
     if (nuevo.estado !== 'cerrada' || anterior?.estado === 'cerrada') {
       return new Response(JSON.stringify({ ok: true, ignorado: true }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
       });
     }
 
@@ -49,12 +60,12 @@ Deno.serve(async (req) => {
     });
 
     return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
     });
   } catch (e) {
     return new Response(JSON.stringify({ error: e.message || String(e) }), {
       status: 400,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
     });
   }
 });

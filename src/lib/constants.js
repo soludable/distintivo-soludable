@@ -35,9 +35,6 @@ export const CATEGORIAS_ANEXO_I = [
 ];
 
 // ── Estados del proceso de acreditación ──
-// en_evaluacion y en_subsanacion son NUEVOS (mejora de evaluación con
-// subsanaciones). en_revision_final ya existía y ahora se reutiliza
-// para guardar el nivel conseguido (ver evaluacion.js: getNivelCodigo).
 export const ESTADOS_PROCESO = {
   SOLICITADA: 'solicitada',
   EN_REVISION: 'en_revision',
@@ -62,8 +59,6 @@ export const ESTADO_LABELS = {
   en_revision_final: 'Evaluación final',
 };
 
-// Colores para los badges de estado (Admin.jsx los usa como ESTADO_COLOR;
-// se mantiene aquí también por si conviene centralizarlo más adelante).
 export const ESTADO_COLOR = {
   solicitada: '#F5C800',
   en_revision: '#00B8C8',
@@ -76,9 +71,6 @@ export const ESTADO_COLOR = {
   en_revision_final: '#4CAF50',
 };
 
-// Pasos del "stepper" de estado para el dashboard del solicitante.
-// Deliberadamente NO incluye solicitada/en_revision/aprobada/rechazada
-// (esos son de la solicitud, no del proceso ya aprobado).
 export const PASOS_PROCESO = [
   { estado: 'en_autoevaluacion', label: 'Autoevaluación' },
   { estado: 'cerrada', label: 'Cierre' },
@@ -88,7 +80,7 @@ export const PASOS_PROCESO = [
 ];
 
 // ── Número identificativo: SOL-YYYY-NNN-XX ──
-// IMPORTANTE: la generación definitiva será en servidor (Postgres, Fase D).
+// IMPORTANTE: la generación definitiva es en servidor (Postgres).
 // Este generador local es SOLO para la fase de datos simulados.
 const SUFIJO_ALFABETO = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // sin I, O (ambiguas)
 
@@ -111,6 +103,3 @@ export const FOOTER_TEXT = 'Desarrollado por DoncelProject · doncel.project@gma
 // ── Adjuntos ──
 export const MAX_PDF_BYTES = 2 * 1024 * 1024; // 2 MB por archivo
 export const MAX_ARCHIVOS_POR_BP = 5; // varios adjuntos por estándar
-
-// ── Clave temporal fase local (se sustituye por Supabase Auth en Fase E) ──
-export const DEFAULT_PASS = 'soludable2026';
